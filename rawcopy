@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # encoding=utf8 ---------------------------------------------------------------
 # Project           : NAME
 # -----------------------------------------------------------------------------
@@ -9,19 +9,20 @@
 # Last modification : 2015-07-27
 # -----------------------------------------------------------------------------
 
-import os, stat, sys, dbm, argparse
+import os, stat, sys, dbm, argparse, shutil
 
 try:
 	import reporter as logging
 except:
 	import logging
 
-VERSION = "0.0.0"
-LICENSE = "http://ffctn.com/doc/licenses/bsd"
-TYPE_BASE = "B"
-TYPE_ROOT = "R"
-TYPE_DIR  = "D"
-TYPE_FILE = "F"
+VERSION      = "0.0.0"
+LICENSE      = "http://ffctn.com/doc/licenses/bsd"
+TYPE_BASE    = "B"
+TYPE_ROOT    = "R"
+TYPE_DIR     = "D"
+TYPE_FILE    = "F"
+TYPE_SYMLINK = "S"
 
 """{{{
 \# Rawcopy
@@ -55,6 +56,12 @@ The process can be interrupted and resumed.
 # inode: [pid, pid, pid]
 # node:  {nid:int, path:string, parent:int, type=("d"|"f"|"l"|"h")}
 
+# -----------------------------------------------------------------------------
+#
+# SECTION
+#
+# -----------------------------------------------------------------------------
+
 class Catalogue(object):
 
 	EXCLUDE = "data/wpi/"
@@ -71,7 +78,7 @@ class Catalogue(object):
 				logging.info("Catalogue: {0} files {1} dirs in {2}".format(len(files), len(dirs), root))
 				yield (counter, TYPE_ROOT, root)
 				for name in files:
-					yield (counter, TYPE_FILE, name)
+					yield (counter, TYPE_SYMLINK if os.path.islink(os.path.join(root, name)) else TYPE_FILE, name)
 					counter += 1
 				for name in dirs:
 					yield (counter, TYPE_DIR, name)
@@ -79,48 +86,146 @@ class Catalogue(object):
 
 	def write( self, output ):
 		for i, t, p in self.walk():
-			output.write("{0}:{1}:{2}\n".format(i,t,p))
+			output.write(bytes("{0}:{1}:{2}\n".format(i,t,p), "utf8"))
 
 	def save( self, path ):
+		d = os.path.dirname(path)
+		if not os.path.exists(d):
+			logging.info("Catalogue: creating catalogue directory {0}".format(d))
+			os.makedirs(d)
 		with open(path, "wb") as f:
 			self.write(f)
 
+# -----------------------------------------------------------------------------
+#
+# SECTION
+#
+# -----------------------------------------------------------------------------
+
 class Copy(object):
 
-	def __init__( self ):
-		pass
-		self.dbpath = "inodes.db"
+	def __init__( self, output ):
 		self.db     = None
+		self.last   = -1
+		self.output = output
+		self.base   = None
+		self.root   = None
+		if not os.path.exists(output):
+			logging.info("Copy: creating output directory {0}".format(output))
+			os.makedirs(output)
 
-	def _open( self ):
-		if not self.sb: self.db = dbm.open(self.dbpath, "c")
+	def _open( self, path ):
+		self._close()
+		if not self.db:
+			logging.info("Copy: opening copy database at {0}".format(path))
+			self.db = dbm.open(path, "c")
 		return self
 
 	def _close( self ):
-		if self.sb:
+		if self.db:
+			logging.info("Copy: opening closing database")
 			self.db.close()
 			self.db = None
 		return self
 
-	def copy( self, source, destination ):
-		s_stat  = os.stat(source)
+	def fromCatalogue( self, path ):
+		"""Reads the given catalogue and copies directories, symlinks and files
+		listed in the catalogue. Note that this expects the catalogue to
+		be in traversal order."""
+		logging.info("Opening catalogue: {0}".format(path))
+		base = None
+		root = None
+		with open(path, "r") as f:
+			for line in f:
+				i, t, p   = line.split(":", 2)
+				# The path has a trailing '\n'
+				p = p[:-1]
+				self.last   = int(i)
+				source      = os.path.join(root or self.base, p)
+				suffix      = source[len(self.base):] if self.base else source
+				if suffix[0] == "/": suffix = suffix[1:]
+				if t == TYPE_BASE:
+					self.base = base = p
+					assert os.path.exists(p), "Source directory does not exists: {0}".format(p)
+					rd = os.path.join(self.output, "__rawcopy__")
+					if not os.path.exists(rd): os.makedirs(rd)
+					self._open(os.path.join(rd, "copy.db"))
+				elif t == TYPE_ROOT:
+					self.root   = root = p
+					destination = os.path.join(os.path.join(self.output, suffix))
+					if not os.path.exists(destination):
+						self.copydir(p, destination, suffix)
+				else:
+					assert root and self.output
+					destination = os.path.join(os.path.join(self.output, suffix))
+					if not os.path.exists(destination):
+						if t == TYPE_DIR:
+							self.copydir(source, destination, p)
+						elif t == TYPE_SYMLINK:
+							self.copylink(source, destination, p)
+						elif t == TYPE_FILE:
+							assert root
+							self.copyfile(source, destination, p)
+						else:
+							logging.error("Unsupported catalogue type: {1} at {0}:{1}:{2}", i, t, p)
+				# We sync the database every 1000 item
+				if i.endswith("000"):
+					logging.info("{0} items processed, syncing db".format(i))
+					if hasattr(self.db, "sync"):
+						self.db.sync()
+		# We don't forget to close the DB
+		self._close()
+
+	def copyattr( self, source, destination, stats=None ):
+		"""Copies the attributes from source to destination, (re)using the
+		given `stats` info if provided."""
+		s_stat = stats or os.lstat(source)
+		shutil.copystat(source, destination, follow_symlinks=False)
+		os.chown(destination, s_stat[stat.ST_GID], s_stat[stat.ST_UID], follow_symlinks=False)
+
+	def copydir( self, source, destination, path ):
+		"""Copies the given directory to the destination. This does not
+		copy its contents."""
+		logging.info("Copying directory: {0}".format(path))
+		os.mkdir(destination)
+		self.copyattr(source, destination)
+
+	def copylink( self, source, destination, path ):
+		"""Copies the given symlink to the destination. This preserves the
+		target but does not check if it is valid or not."""
+		target = os.readlink(source)
+		logging.info("Copying link [->{1}]: {0}".format(path, target))
+		d      = os.path.dirname(destination)
+		f      = os.path.basename(destination)
+		os.symlink(target, destination)
+		self.copyattr(source, destination)
+
+	def copyfile( self, source, destination, path ):
+		"""Copies the given file. This will check the file's inode to
+		detect hardlink. If a file with the same inode has already been
+		copied, then a hard link will be created to that file, otherwise
+		a new file will be created."""
+		logging.info("Copying file: {0}".format(path))
+		s_stat  = os.lstat(source)
 		s_inode = s_stat[stat.ST_INO]
-		if not os.path.exists(destination):
-			# If the destination does not exists, then we need to restore
-			# it.
-			original = self.getInode(s_inode)
-			if not original:
-				# If we haven't copied the source inode anywhere into the
-				# destination, then we copy it, preserving its attributes
-				self.Copy(source, destination, s_stat)
-				# NOTE: We really don't want to have absolute paths here, we
-				# need them relative, otherwise the DB is going to explode in
-				# size.
-				self.setInodePath(s_inode, destination)
-			else:
-				# Otherwise if the inode is already there, then we can
-				# simply hardlink it
-				self.HardLink(source, destination, s_stat)
+		# If the destination does not exists, then we need to restore
+		# it.
+		original_path = self.getInode(s_inode)
+		if not original_path:
+			# If we haven't copied the source inode anywhere into the
+			# destination, then we copy it, preserving its attributes
+			shutil.copyfile(source, destination, follow_symlinks=False)
+			# NOTE: We really don't want to have absolute paths here, we
+			# need them relative, otherwise the DB is going to explode in
+			# size.
+			self.setInodePath(s_inode, path)
+		else:
+			# Otherwise if the inode is already there, then we can
+			# simply hardlink it
+			link_source = os.path.join(self.base, original_path)
+			os.link(link_source, destination, follow_symlinks=False)
+		# In all cases we copy the attributes
+		self.copyattr(source, destination)
 
 	def getInode( self, inode ):
 		inode = str(inode)
@@ -128,6 +233,15 @@ class Copy(object):
 
 	def getInodePath( self, inode ):
 		return self.db.get("@" + str(inode))
+
+	def setInodePath( self, inode, path ):
+		self.db["@" + str(inode)] = path
+
+# -----------------------------------------------------------------------------
+#
+# SECTION
+#
+# -----------------------------------------------------------------------------
 
 def run( args ):
 	sources = [os.path.abspath(_) for _ in args.source]
@@ -149,9 +263,14 @@ def run( args ):
 	# Now we retrieve/create the catalogue
 	cat_path = args.catalogue or os.path.join(args.output, "__rawcopy__", "catalogue.lst")
 	if not os.path.exists(cat_path):
-		logging.info("Creating source catalogue at {0}")
-		# c = Catalogue(base, sources)
-		# c.save(cata_path)
+		logging.info("Creating source catalogue at {0}".format(cat_path))
+		c = Catalogue(base, sources)
+		c.save(cat_path)
+	# Now we iterate over the catalogue
+	if args.output:
+		logging.info("Copy catalogue's contents to {0}".format(args.output))
+		c = Copy(args.output)
+		c.fromCatalogue(cat_path)
 
 def command( args ):
 	parser = argparse.ArgumentParser(
@@ -180,7 +299,8 @@ def command( args ):
 
 
 if __name__ == "__main__":
-	if hasattr(logging, "install"): logging.install("stderr")
+	if hasattr(logging, "install"): logging.install(channel="stderr")
+	else: logging.basicConfig(level=logging.DEBUG)
 	command(sys.argv[1:])
 
 # EOF - vim: ts=4 sw=4 noet
