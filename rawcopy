@@ -1,0 +1,186 @@
+#!/usr/bin/env python
+# encoding=utf8 ---------------------------------------------------------------
+# Project           : NAME
+# -----------------------------------------------------------------------------
+# Author            : FFunction
+# License           : BSD License
+# -----------------------------------------------------------------------------
+# Creation date     : 2015-07-27
+# Last modification : 2015-07-27
+# -----------------------------------------------------------------------------
+
+import os, stat, sys, dbm, argparse
+
+try:
+	import reporter as logging
+except:
+	import logging
+
+VERSION = "0.0.0"
+LICENSE = "http://ffctn.com/doc/licenses/bsd"
+TYPE_BASE = "B"
+TYPE_ROOT = "R"
+TYPE_DIR  = "D"
+TYPE_FILE = "F"
+
+"""{{{
+\# Rawcopy
+## Perfect-copy for Unix
+
+```
+Version :  0.0.1
+URL     :  http://github.com/sebastien/rawcopy
+```
+
+Rawcopy is a tool that allows to copy directory tree that make heavy use of hard links,
+such as trees backed up created by tools `rsnapshot`, `rdiff-backup` or Back In Time.
+
+Using `rsync` (`-aH` option), or `cp -a` did not work in my case, resulting in
+hard links not being detected and files being duplicated instead of being
+copied by inode.
+
+Rawcopy works by creating a catalogue of all the files in the source drive
+and then iterating through the catalogue, copying each file to the destination.
+
+The process can be interrupted and resumed.
+
+# SEE:  http://jeremy.zawodny.com/blog/archives/010037.html
+"""
+
+# The catalogue should be like this:
+#
+# 1) We need to store inodes, because that's the only way to know if a file
+#    content should be shared or not.
+#
+# inode: [pid, pid, pid]
+# node:  {nid:int, path:string, parent:int, type=("d"|"f"|"l"|"h")}
+
+class Catalogue(object):
+
+	EXCLUDE = "data/wpi/"
+
+	def __init__( self, base, paths=() ):
+		self.base  = base
+		self.paths = [_ for _ in paths]
+
+	def walk( self ):
+		counter = 0
+		yield (counter, TYPE_BASE, self.base)
+		for p in self.paths:
+			for root, dirs, files in os.walk(p, topdown=True):
+				logging.info("Catalogue: {0} files {1} dirs in {2}".format(len(files), len(dirs), root))
+				yield (counter, TYPE_ROOT, root)
+				for name in files:
+					yield (counter, TYPE_FILE, name)
+					counter += 1
+				for name in dirs:
+					yield (counter, TYPE_DIR, name)
+					counter += 1
+
+	def write( self, output ):
+		for i, t, p in self.walk():
+			output.write("{0}:{1}:{2}\n".format(i,t,p))
+
+	def save( self, path ):
+		with open(path, "wb") as f:
+			self.write(f)
+
+class Copy(object):
+
+	def __init__( self ):
+		pass
+		self.dbpath = "inodes.db"
+		self.db     = None
+
+	def _open( self ):
+		if not self.sb: self.db = dbm.open(self.dbpath, "c")
+		return self
+
+	def _close( self ):
+		if self.sb:
+			self.db.close()
+			self.db = None
+		return self
+
+	def copy( self, source, destination ):
+		s_stat  = os.stat(source)
+		s_inode = s_stat[stat.ST_INO]
+		if not os.path.exists(destination):
+			# If the destination does not exists, then we need to restore
+			# it.
+			original = self.getInode(s_inode)
+			if not original:
+				# If we haven't copied the source inode anywhere into the
+				# destination, then we copy it, preserving its attributes
+				self.Copy(source, destination, s_stat)
+				# NOTE: We really don't want to have absolute paths here, we
+				# need them relative, otherwise the DB is going to explode in
+				# size.
+				self.setInodePath(s_inode, destination)
+			else:
+				# Otherwise if the inode is already there, then we can
+				# simply hardlink it
+				self.HardLink(source, destination, s_stat)
+
+	def getInode( self, inode ):
+		inode = str(inode)
+		return self.db.get(inode)
+
+	def getInodePath( self, inode ):
+		return self.db.get("@" + str(inode))
+
+def run( args ):
+	sources = [os.path.abspath(_) for _ in args.source]
+	base    = os.path.commonprefix(sources)
+	for s in sources:
+		if not os.path.exists(s):
+			logging.error("Source path does not exists: {0}".format(s))
+			return None
+	# We log the information about the sources
+	logging.info("Using base: {0}".format(base))
+	for _ in sources: logging.info("Using source: {0}".format(_))
+	# Sometimes the sources have a common filename prefix, so make sure it is
+	# a directory or we get its dirname
+	if not os.path.exists(base) or not os.path.isdir(base): base = os.path.dirname(base)
+	# Now we create the catalogue
+	if not (args.catalogue or args.output):
+		logging.error("Either catalogue or output directory are required")
+		return -1
+	# Now we retrieve/create the catalogue
+	cat_path = args.catalogue or os.path.join(args.output, "__rawcopy__", "catalogue.lst")
+	if not os.path.exists(cat_path):
+		logging.info("Creating source catalogue at {0}")
+		# c = Catalogue(base, sources)
+		# c.save(cata_path)
+
+def command( args ):
+	parser = argparse.ArgumentParser(
+		description="Creates a raw copy of the given source tree"
+	)
+	parser.add_argument("source", metavar="SOURCE",  type=str, nargs="+",
+		help="The source tree to backup"
+	)
+	parser.add_argument("-c", "--catalogue", type=str,
+		help="Uses the given catalogue for all the files to copy."
+	)
+	parser.add_argument("-o", "--output", type=str,
+		help="The path where the source tree will be backed up."
+	)
+	parser.add_argument("-C", "--catalogue-only", action="store_true", default=False,
+		help="Does not do any copying, simple creates the catalogue"
+	)
+	args = parser.parse_args()
+	run(args)
+
+# rawcopy -l PATH
+#	Creates a list of all the files at the given path, stores it as readonly
+
+# rawcopy -l PATH <DEST>
+#	Creates a raw copy of all the files in at the given directory
+
+
+if __name__ == "__main__":
+	if hasattr(logging, "install"): logging.install("stderr")
+	command(sys.argv[1:])
+
+# EOF - vim: ts=4 sw=4 noet
