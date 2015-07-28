@@ -111,6 +111,9 @@ with the suprisingly hard problem of copy directory trees with hard links.
 }}}
 """
 
+# TODO: Implement fast resume from catalogue (skip ahead to find the last index
+# -- or simply store the last offset).
+
 # -----------------------------------------------------------------------------
 #
 # CATALOGUE
@@ -129,15 +132,24 @@ class Catalogue(object):
 		counter = 0
 		yield (counter, TYPE_BASE, self.base)
 		for p in self.paths:
-			for root, dirs, files in os.walk(p, topdown=True):
-				logging.info("Catalogue: {0} files {1} dirs in {2}".format(len(files), len(dirs), root))
-				yield (counter, TYPE_ROOT, root)
-				for name in files:
-					yield (counter, TYPE_SYMLINK if os.path.islink(os.path.join(root, name)) else TYPE_FILE, name)
-					counter += 1
-				for name in dirs:
-					yield (counter, TYPE_DIR, name)
-					counter += 1
+			if os.path.isfile(p):
+				yield (counter, TYPE_ROOT, os.path.dirname(p))
+				counter += 1
+				yield (counter, TYPE_FILE, os.path.basename(p))
+			elif os.path.islink(p):
+				yield (counter, TYPE_ROOT, os.path.dirname(p))
+				counter += 1
+				yield (counter, TYPE_SYMLINK, os.path.basename(p))
+			else:
+				for root, dirs, files in os.walk(p, topdown=True):
+					logging.info("Catalogue: {0} files {1} dirs in {2}".format(len(files), len(dirs), root))
+					yield (counter, TYPE_ROOT, root)
+					for name in files:
+						yield (counter, TYPE_SYMLINK if os.path.islink(os.path.join(root, name)) else TYPE_FILE, name)
+						counter += 1
+					for name in dirs:
+						yield (counter, TYPE_DIR, name)
+						counter += 1
 
 	def write( self, output ):
 		for i, t, p in self.walk():
@@ -199,18 +211,20 @@ class Copy(object):
 				source      = os.path.join(root or self.base, p)
 				suffix      = source[len(self.base):] if self.base else source
 				if suffix[0] == "/": suffix = suffix[1:]
-				if not os.path.exists(source):
+				if not (os.path.exists(source) or os.path.islink(source)):
 					logging.error("Source path not available: {0}".format(source))
 				elif t == TYPE_BASE:
 					self.base = base = p
 					assert os.path.exists(p), "Source directory does not exists: {0}".format(p)
 					rd = os.path.join(self.output, "__rawcopy__")
-					if not os.path.exists(rd): os.makedirs(rd)
+					# if not os.path.exists(rd): os.makedirs(rd)
 					self._open(os.path.join(rd, "copy.db"))
 				elif t == TYPE_ROOT:
 					self.root   = root = p
 					destination = os.path.join(os.path.join(self.output, suffix))
 					if not os.path.exists(destination):
+						pd = os.path.dirname(destination)
+						if not os.path.exists(pd): os.makedirs(pd)
 						self.copydir(p, destination, suffix)
 				else:
 					assert root and self.output
@@ -225,6 +239,8 @@ class Copy(object):
 							self.copyfile(source, destination, p)
 						else:
 							logging.error("Unsupported catalogue type: {1} at {0}:{1}:{2}", i, t, p)
+					else:
+						logging.info("Skipping already copied file: {0}".format(destination))
 				# We sync the database every 1000 item
 				if i.endswith("000"):
 					logging.info("{0} items processed, syncing db".format(i))
@@ -262,21 +278,22 @@ class Copy(object):
 		detect hardlink. If a file with the same inode has already been
 		copied, then a hard link will be created to that file, otherwise
 		a new file will be created."""
-		logging.info("Copying file: {0}".format(destination))
 		s_stat  = os.lstat(source)
 		s_inode = s_stat[stat.ST_INO]
 		# If the destination does not exists, then we need to restore
 		# it.
-		original_path = self.getInode(s_inode)
+		original_path = self.getInodePath(s_inode)
 		if not original_path:
+			logging.info("Copying file: {0}".format(destination))
 			# If we haven't copied the source inode anywhere into the
 			# destination, then we copy it, preserving its attributes
 			shutil.copyfile(source, destination, follow_symlinks=False)
 			# NOTE: We really don't want to have absolute paths here, we
 			# need them relative, otherwise the DB is going to explode in
 			# size.
-			self.setInodePath(s_inode, path)
+			self.setInodePath(s_inode, destination)
 		else:
+			logging.info("Hard linking file: {0}".format(destination))
 			# Otherwise if the inode is already there, then we can
 			# simply hardlink it
 			link_source = os.path.join(self.base, original_path)
@@ -284,15 +301,14 @@ class Copy(object):
 		# In all cases we copy the attributes
 		self.copyattr(source, destination)
 
-	def getInode( self, inode ):
-		inode = str(inode)
-		return self.db.get(inode)
-
 	def getInodePath( self, inode ):
-		return self.db.get("@" + str(inode))
+		path = self.db.get("@" + str(inode))
+		return os.path.join(self.output, path.decode("utf8")) if path else None
 
 	def setInodePath( self, inode, path ):
-		self.db["@" + str(inode)] = path
+		path = path[len(self.output):]
+		if path[0] == "/": path = path[1:]
+		self.db["@" + str(inode)] = bytes(path, "utf8")
 
 # -----------------------------------------------------------------------------
 #
@@ -303,6 +319,7 @@ class Copy(object):
 def run( args ):
 	sources = [os.path.abspath(_) for _ in args.source]
 	base    = os.path.commonprefix(sources)
+	if not os.path.exists(base) or not os.path.isdir(base): base = os.path.dirname(base)
 	for s in sources:
 		if not os.path.exists(s):
 			logging.error("Source path does not exists: {0}".format(s))
@@ -312,7 +329,6 @@ def run( args ):
 	for _ in sources: logging.info("Using source: {0}".format(_))
 	# Sometimes the sources have a common filename prefix, so make sure it is
 	# a directory or we get its dirname
-	if not os.path.exists(base) or not os.path.isdir(base): base = os.path.dirname(base)
 	# Now we create the catalogue
 	if not (args.catalogue or args.output):
 		logging.error("Either catalogue or output directory are required")
