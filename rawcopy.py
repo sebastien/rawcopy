@@ -25,19 +25,18 @@ TYPE_FILE    = "F"
 TYPE_SYMLINK = "S"
 
 """{{{
-\# Rawcopy
-## Perfect-copy for Unix
+\# Rawcopy: low-level directory tree copy
 
 ```
 Version :  0.0.1
 URL     :  http://github.com/sebastien/rawcopy
 ```
 
-Rawcopy is a tool that allows to copy directory trees that make heavy use of hard links,
+Rawcopy is a tool that allows to *copy directory trees that make heavy use of hard links*,
 such as trees backed up created by tools `rsnapshot`, `rdiff-backup` or Back In Time.
 
-Here is a typical scenario, imagine you have two incremental backups source trees
-to copy
+Here is a typical scenario where you have two incremental backups source trees
+to copy:
 
 ```
 $ du -sch *
@@ -53,11 +52,11 @@ $ du -sch *
 78G	20120828-114147-345
 ```
 
-The `20120828-114147-345` directory has almost doubled in size, because some
-of its files are hard-links to content from `20111227-164323-320`, but are
-not detected and copied as new files. As a result, instead of sharing the same
-inode, this results in new files, and a lot of wasted space. A 1Tb backup might
-end up being 10Tb of more without preserving hard links.
+The `20120828-114147-345` directory has almost doubled in size, because some of
+its files are hard-links to content from `20111227-164323-320`. As these linked
+are not detected, they are copied as new files instead of sharing the same
+inode. A 1Tb backup might end up being 10Tb of more without preserving hard
+links.
 
 Features
 --------
@@ -82,16 +81,13 @@ Install
 Rawcopy requires `python3` (tested on python-3.4) and can be easily installed
 through a variety of ways:
 
-Using pip
+Using `pip`
+:	`pip install -U rawcopy`
 
-:	`pip install -U --user rawcopy`
-
-Using `easy_install`::
-
+Using `easy_install`
 :	`easy_install -U rawcopy`
 
 Using `curl`
-
 :	`curl https://raw.githubusercontent.com/sebastien/rawcopy/master/rawcopy > rawcopy ; chmod +x rawcopy`
 
 Use cases
