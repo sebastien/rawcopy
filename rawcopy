@@ -6,7 +6,7 @@
 # License           : BSD License
 # -----------------------------------------------------------------------------
 # Creation date     : 2015-07-27
-# Last modification : 2015-07-27
+# Last modification : 2015-07-28
 # -----------------------------------------------------------------------------
 
 import os, stat, sys, dbm, argparse, shutil
@@ -33,32 +33,90 @@ Version :  0.0.1
 URL     :  http://github.com/sebastien/rawcopy
 ```
 
-Rawcopy is a tool that allows to copy directory tree that make heavy use of hard links,
+Rawcopy is a tool that allows to copy directory trees that make heavy use of hard links,
 such as trees backed up created by tools `rsnapshot`, `rdiff-backup` or Back In Time.
 
-Using `rsync` (`-aH` option), or `cp -a` did not work in my case, resulting in
-hard links not being detected and files being duplicated instead of being
-copied by inode.
+Here is a typical scenario, imagine you have two incremental backups source trees
+to copy
 
-Rawcopy works by creating a catalogue of all the files in the source drive
-and then iterating through the catalogue, copying each file to the destination.
+```
+$ du -sch *
+54G	20111227-164323-320
+42G	20120828-114147-345
+```
 
-The process can be interrupted and resumed.
+copying these using `rsync -aH` (or `cp -a`) gave me the following result:
 
-# SEE:  http://jeremy.zawodny.com/blog/archives/010037.html
+```
+$ du -sch *
+53G	20111227-164323-320
+78G	20120828-114147-345
+```
+
+The `20120828-114147-345` directory has almost doubled in size, because some
+of its files are hard-links to content from `20111227-164323-320`, but are
+not detected and copied as new files. As a result, instead of sharing the same
+inode, this results in new files, and a lot of wasted space. A 1Tb backup might
+end up being 10Tb of more without preserving hard links.
+
+Features
+--------
+
+Raw copy key features are:
+
+- preserves hard-links
+- filesystem-agnostic
+- copies regular/special/extra attributes (on Linux)
+- can be safely interrupted and resumed
+- copying can be done incrementally
+
+Rawcopy works by first creating a catalogue of all the files in the source trees
+and saving it to the output directory (as `__rawcopy__/catalogue.lst`). Then,
+rawcopy will use this list to copy the files from the source tree, keeping a
+map of original source tree inodes to paths in the destination output. This allows
+to re-create hard-links on the output directory.
+
+Install
+-------
+
+Rawcopy requires `python3` (tested on python-3.4) and can be easily installed
+through a variety of ways:
+
+Using pip
+
+:	`pip install -U --user rawcopy`
+
+Using `easy_install`::
+
+:	`easy_install -U rawcopy`
+
+Using `curl`
+
+:	`curl https://raw.githubusercontent.com/sebastien/rawcopy/master/rawcopy > rawcopy ; chmod +x rawcopy`
+
+Use cases
+---------
+
+Copying a source tree from one drive to another
+===============================================
+
+- moving a backup directory from one drive to another drive, possibly
+  with different filesystems
+- moving a directory tree that makes a heavy use of hard links
+- incrementally copy large amounts of files (1M+ files, 1TB+)
+
+Acknowledgments
+---------------
+
+I would like to thank [Jeremy Zawodny](http://jeremy.zawodny.com/) for
+[sharing his experience](http://jeremy.zawodny.com/blog/archives/010037.html)
+with the suprisingly hard problem of copy directory trees with hard links.
+
 """
-
-# The catalogue should be like this:
-#
-# 1) We need to store inodes, because that's the only way to know if a file
-#    content should be shared or not.
-#
-# inode: [pid, pid, pid]
-# node:  {nid:int, path:string, parent:int, type=("d"|"f"|"l"|"h")}
 
 # -----------------------------------------------------------------------------
 #
-# SECTION
+# CATALOGUE
 #
 # -----------------------------------------------------------------------------
 
@@ -98,7 +156,7 @@ class Catalogue(object):
 
 # -----------------------------------------------------------------------------
 #
-# SECTION
+# COPY
 #
 # -----------------------------------------------------------------------------
 
@@ -144,7 +202,9 @@ class Copy(object):
 				source      = os.path.join(root or self.base, p)
 				suffix      = source[len(self.base):] if self.base else source
 				if suffix[0] == "/": suffix = suffix[1:]
-				if t == TYPE_BASE:
+				if not os.path.exists(source):
+					logging.error("Source path not available: {0}".format(source))
+				elif t == TYPE_BASE:
 					self.base = base = p
 					assert os.path.exists(p), "Source directory does not exists: {0}".format(p)
 					rd = os.path.join(self.output, "__rawcopy__")
@@ -186,7 +246,7 @@ class Copy(object):
 	def copydir( self, source, destination, path ):
 		"""Copies the given directory to the destination. This does not
 		copy its contents."""
-		logging.info("Copying directory: {0}".format(path))
+		logging.info("Copying directory: {0}".format(destination))
 		os.mkdir(destination)
 		self.copyattr(source, destination)
 
@@ -194,7 +254,7 @@ class Copy(object):
 		"""Copies the given symlink to the destination. This preserves the
 		target but does not check if it is valid or not."""
 		target = os.readlink(source)
-		logging.info("Copying link [->{1}]: {0}".format(path, target))
+		logging.info("Copying link [->{1}]: {0}".format(destination, target))
 		d      = os.path.dirname(destination)
 		f      = os.path.basename(destination)
 		os.symlink(target, destination)
@@ -205,7 +265,7 @@ class Copy(object):
 		detect hardlink. If a file with the same inode has already been
 		copied, then a hard link will be created to that file, otherwise
 		a new file will be created."""
-		logging.info("Copying file: {0}".format(path))
+		logging.info("Copying file: {0}".format(destination))
 		s_stat  = os.lstat(source)
 		s_inode = s_stat[stat.ST_INO]
 		# If the destination does not exists, then we need to restore
