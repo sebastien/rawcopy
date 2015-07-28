@@ -16,7 +16,7 @@ try:
 except:
 	import logging
 
-VERSION      = "0.0.0"
+__version__  = "0.0.0"
 LICENSE      = "http://ffctn.com/doc/licenses/bsd"
 TYPE_BASE    = "B"
 TYPE_ROOT    = "R"
@@ -97,7 +97,7 @@ Using `curl`
 Use cases
 ---------
 
-Copying a source tree from one drive to another
+Copying a  tree from one drive to another
 ===============================================
 
 - moving a backup directory from one drive to another drive, possibly
@@ -112,6 +112,7 @@ I would like to thank [Jeremy Zawodny](http://jeremy.zawodny.com/) for
 [sharing his experience](http://jeremy.zawodny.com/blog/archives/010037.html)
 with the suprisingly hard problem of copy directory trees with hard links.
 
+}}}
 """
 
 # -----------------------------------------------------------------------------
