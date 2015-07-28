@@ -14,6 +14,7 @@ DIST            = dist
 API             = $(PROJECT)-api.html
 PACKAGE         = $(PROJECT)
 MODULES         = $(shell find $(SOURCES)/$(PACKAGE) -name "*.py" | cut -d "." -f1 | sed "s|^$(SOURCES)/||g;s|\/|\.|g;s|\.__init__||g" )
+MODULES        := rawcopy
 SOURCE_FILES    = $(shell find $(SOURCES) -name "*.py")
 TEST_FILES      = $(shell find $(TESTS) -name "*.py")
 DIST_CONTENT    = $(DOCUMENTATION) $(SOURCES) $(SCRIPTS) $(TESTS) $(RESOURCES) Makefile README.md LICENSE.md setup.py
@@ -101,18 +102,17 @@ dist:
 	@rm -rf $(DIST)/$(PROJECT)-$(PROJECT_VERSION)
 
 README.md: rawcopy.py
-	litterate $< > $@
+	litterate.py $< > $@
 
 %.html: %.md
 	pandoc -o $@ $<
 
-doc: man
+doc: README.md
 	@echo "Generating $(PROJECT) documentation"
 ifeq ($(shell basename spam/$(SDOC)),sdoc)
 	@$(SDOC) -mtexto -cp$(SOURCES) $(MODULES) $(API)
 else
 	@echo "Sdoc is required to generate $(PROJECT) documentation."
-	@echo "Please see <http://www.ivy.fr/sdoc>"
 endif
 
 tags:
