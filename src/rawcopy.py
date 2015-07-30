@@ -123,7 +123,7 @@ If you would like to create a copy of `/mnt/old-drive/backup/2010` to
 rawcopy -o /mnt/new-drive/backup/2010 /mnt/old-drive/backup/2010
 ```
 
-### Copying a multiple directories
+### Copying multiple directories
 
 If you would like to create a copy of `/mnt/old-drive/backup-john"
 and `/mnt/old-drive/backup-jane` to `/mnt/new-drive/backup-john`
@@ -136,7 +136,26 @@ rawcopy -o /mnt/new-drive/ /mnt/old-drive/backup-john /mnt/old-drive/backup-jane
 Rawcopy will automatically identify the *base path* (`/mnt/old-drive/`) and
 map it to `mnt/new/drive`.
 
+### Resuming a an interrupted/failed copy
 
+In the case that a `rawcopy` run failed at somepoint, you can resume it
+by looking for the last copied file number, usually prefixing the path
+in the output log:
+
+```
+Copying path 2553338:icon-video.svg
+                   ^^^^^^^
+                   PATH ID
+```
+
+To resume the command from path `#2553338` simly do:
+
+```
+rawcopy -r2553338- -o <OUTPUT PATH> <PATH TO COPY>...
+```
+
+Note that the trailing `-` is important as otherwise only that specific
+file will be copied.
 
 ## Copying a  tree from one drive to another
 ===============================================
@@ -259,19 +278,19 @@ class Copy(object):
 		self.base   = None
 		self.root   = None
 		if not os.path.exists(output):
-			logging.info("Copy: creating output directory {0}".format(output))
+			logging.info("Creating output directory {0}".format(output))
 			os.makedirs(output)
 
 	def _open( self, path ):
 		self._close()
 		if not self.db:
-			logging.info("Copy: opening copy database at {0}".format(path))
+			logging.info("Opening copy database at {0}".format(path))
 			self.db = dbm.open(path, "c")
 		return self
 
 	def _close( self ):
 		if self.db:
-			logging.info("Copy: opening closing database")
+			logging.info("Opening closing database")
 			self.db.close()
 			self.db = None
 		return self
@@ -290,7 +309,6 @@ class Copy(object):
 			for line in f:
 				j, t, p   = line.split(":", 2) ; p = p[:-1]
 				i         = int(j) ; self.last = i
-
 				if t == TYPE_BASE:
 					# The first line of the catalogue is expected to be the base
 					# it is also expected to be absolute.
@@ -299,7 +317,7 @@ class Copy(object):
 					# Once we have the base, we can create rawcopy's DB files
 					rd = os.path.join(self.output, "__rawcopy__")
 					if not os.path.exists(rd):
-						logging.info("Copy: creating rawcopy database directory {0}".format(utf8(rd)))
+						logging.info("Creating rawcopy database directory {0}".format(utf8(rd)))
 						os.makedirs(rd)
 					self._open(os.path.join(rd, "copy.db"))
 				elif t == TYPE_ROOT:
@@ -325,11 +343,6 @@ class Copy(object):
 							os.makedirs(pd)
 						if os.path.isdir(source):
 							self.copydir(p, destination, suffix)
-						elif self.hardlink(p, destination):
-							# NOTE: Hard-linking of directory is NOT permitted
-							# Now we see if the file should be a hard link, in which
-							# case we do it, otherwise we copy the rest.
-							pass
 						elif os.path.islink(source):
 							self.copylink(p, destination, suffix)
 						elif os.path.isfile(source):
@@ -355,16 +368,13 @@ class Copy(object):
 					if not (os.path.exists(source) or os.path.islink(source)):
 						logging.error("Source path not available: {0}:{1}".format(i,utf8(source)))
 					elif not (os.path.exists(destination) or os.path.islink(destination)):
-						logging.info("Copy: copying path {0}:{1}".format(i,utf8(p)))
-						if t == TYPE_DIR:
+						logging.info("Copying path [{2}] {0}:{1}".format(i,utf8(p),t))
+						if t == TYPE_DIR or os.path.isdir(source):
+							if t != TYPE_DIR: logging.warn("Source detected as directory, but typed as {0} -- {1}:{2}".format(t, i, utf(p)))
 							self.copydir(source, destination, p)
-						elif self.hardlink(source, destination):
-							# NOTE: Hardlinks are not OK in directories
-							logging.info("Source was a hardlink: {0}:{1}".format(i,utf8(p)))
 						elif t == TYPE_SYMLINK:
 							self.copylink(source, destination, p)
 						elif t == TYPE_FILE:
-							assert root
 							self.copyfile(source, destination, p)
 						else:
 							logging.error("Unsupported catalogue type: {1} at {0}:{1}:{2}", i, t, p)
@@ -420,9 +430,9 @@ class Copy(object):
 		s_stat  = os.lstat(source)
 		mode    = s_stat[stat.ST_MODE]
 		if stat.S_ISCHR(mode):
-			logging.info("Copy: skipping special device file: {0}".format(utf8(source)))
+			logging.info("Skipping special device file: {0}".format(utf8(source)))
 		elif stat.S_ISBLK(mode):
-			logging.info("Copy: skipping block device file: {0}".format(utf8(source)))
+			logging.info("Skipping block device file: {0}".format(utf8(source)))
 		elif stat.S_ISFIFO(mode):
 			logging.info("Skipping FIFO file: {0}".format(utf8(source)))
 		elif stat.S_ISSOCK(mode):
@@ -432,18 +442,20 @@ class Copy(object):
 			# If the destination does not exists, then we need to restore
 			# it.
 			original_path = self.getInodePath(s_inode)
-			assert not original_path, "File should be a hard-link: {0}".format(utf8(destination))
-			logging.info("Copying file: {0}".format(destination))
-			if self.test: return False
-			# If we haven't copied the source inode anywhere into the
-			# destination, then we copy it, preserving its attributes
-			shutil.copyfile(source, destination, follow_symlinks=False)
-			# NOTE: We really don't want to have absolute paths here, we
-			# need them relative, otherwise the DB is going to explode in
-			# size.
-			self.setInodePath(s_inode, destination[len(self.output):])
-			# In all cases we copy the attributes
-			self.copyattr(source, destination)
+			if original_path:
+				self.hardlink(source, destination)
+			else:
+				logging.info("Copying file: {0}".format(destination))
+				if self.test: return False
+				# If we haven't copied the source inode anywhere into the
+				# destination, then we copy it, preserving its attributes
+				shutil.copyfile(source, destination, follow_symlinks=False)
+				# NOTE: We really don't want to have absolute paths here, we
+				# need them relative, otherwise the DB is going to explode in
+				# size.
+				self.setInodePath(s_inode, destination[len(self.output):])
+				# In all cases we copy the attributes
+				self.copyattr(source, destination)
 
 	def hardlink( self, source, destination ):
 		"""Copies the file/directory as a hard link. Return True if
@@ -482,7 +494,7 @@ class Copy(object):
 		inode = s[stat.ST_INO]
 		mode  = s[stat.ST_MODE]
 		if not stat.S_ISDIR(mode) and not self.getInodePath(inode):
-			logging.info("Copy: remapping inode for {0} to {1}".format(utf8(source), utf8(path)))
+			logging.info("Remapping inode for {0} to {1}".format(utf8(source), utf8(path)))
 			self.setInodePath(inode, path)
 			return True
 		else:
