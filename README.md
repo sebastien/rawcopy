@@ -31,7 +31,7 @@ not detected and copied as new files. As a result, instead of sharing the same
 inode, this results in new files, and a lot of wasted space. A 1Tb backup might
 end up being 10Tb of more without preserving hard links.
 
-## Features
+# Features
 
 Raw copy key features are:
 
@@ -47,7 +47,7 @@ rawcopy will use this list to copy the files from the source tree, keeping a
 map of original source tree inodes to paths in the destination output. This allows
 to re-create hard-links on the output directory.
 
-## Install
+# Install
 
 Rawcopy requires `python3` (tested on python-3.4) and can be easily installed
 through a variety of ways:
@@ -58,7 +58,7 @@ Using `easy_install`: `easy_install -U rawcopy`
 
 Using `curl`: `curl https://raw.githubusercontent.com/sebastien/rawcopy/master/rawcopy > rawcopy ; chmod +x rawcopy`
 
-## Usage
+# Usage
 
 Rawcopy is available both as a Python module (`rawcopy`) and a command
 line tool (`racopy`).
@@ -85,9 +85,9 @@ optional arguments:
   -C, --catalogue-only  Does not do any copying, simple creates the catalogue
 ```
 
-## Use cases
+# Use cases
 
-### Copying a single directory
+## Copying a single directory
 
 If you would like to create a copy of `/mnt/old-drive/backup/2010` to
 `/mnt/new-drive/backup/2010`, you can do:
@@ -96,9 +96,9 @@ If you would like to create a copy of `/mnt/old-drive/backup/2010` to
 rawcopy -o /mnt/new-drive/backup/2010 /mnt/old-drive/backup/2010
 ```
 
-### Copying a multiple directories
+## Copying a multiple directories
 
-If you would like to create a copy of `/mnt/old-drive/backup-john" 
+If you would like to create a copy of `/mnt/old-drive/backup-john"
 and `/mnt/old-drive/backup-jane` to `/mnt/new-drive/backup-john`
 and `/mnt/new-drive/backup-jane`, you can do:
 
@@ -111,7 +111,7 @@ map it to `mnt/new/drive`.
 
 
 
-## Copying a  tree from one drive to another
+# Copying a  tree from one drive to another
 ===============================================
 
 - moving a backup directory from one drive to another drive, possibly

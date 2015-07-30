@@ -101,8 +101,8 @@ dist:
 	-C $(DIST) $(PROJECT)-$(PROJECT_VERSION)
 	@rm -rf $(DIST)/$(PROJECT)-$(PROJECT_VERSION)
 
-README.md: rawcopy.py
-	litterate.py $< > $@
+README.md: src/rawcopy.py
+	chmod +w $@ ; true ; litterate.py $< > $@ ; chmod -w $@
 
 %.html: %.md
 	pandoc -o $@ $<
