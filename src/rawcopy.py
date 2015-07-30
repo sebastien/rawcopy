@@ -294,12 +294,13 @@ class Copy(object):
 						# We make sure the parent destination exists (it should be the case)
 						if not os.path.exists(pd):
 							os.makedirs(pd)
-						# Now we see if the file should be a hard link, in which
-						# case we do it, otherwise we copy the rest.
-						if self.hardlink(p, destination):
-							pass
-						elif os.path.isdir(source):
+						if os.path.isdir(source):
 							self.copydir(p, destination, suffix)
+						elif self.hardlink(p, destination):
+							# NOTE: Hard-linking of directory is NOT permitted
+							# Now we see if the file should be a hard link, in which
+							# case we do it, otherwise we copy the rest.
+							pass
 						elif os.path.islink(source):
 							self.copylink(p, destination, suffix)
 						elif os.path.isfile(source):
@@ -326,10 +327,11 @@ class Copy(object):
 						logging.error("Source path not available: {0}:{1}".format(i,utf8(source)))
 					elif not (os.path.exists(destination) or os.path.islink(destination)):
 						logging.info("Copy: copying path {0}:{1}".format(i,utf8(p)))
-						if self.hardlink(source, destination):
-							logging.info("Source was a hardlink: {0}:{1}".format(i,utf8(p)))
-						elif t == TYPE_DIR:
+						if t == TYPE_DIR:
 							self.copydir(source, destination, p)
+						elif self.hardlink(source, destination):
+							# NOTE: Hardlinks are not OK in directories
+							logging.info("Source was a hardlink: {0}:{1}".format(i,utf8(p)))
 						elif t == TYPE_SYMLINK:
 							self.copylink(source, destination, p)
 						elif t == TYPE_FILE:
@@ -420,7 +422,12 @@ class Copy(object):
 		if self.test: return False
 		# Otherwise if the inode is already there, then we can
 		# simply hardlink it
-		inode = os.lstat(source)[stat.ST_INO]
+		s     = os.lstat(source)
+		inode = s[stat.ST_INO]
+		mode  = s[stat.ST_MODE]
+		if stat.S_ISDIR(mode) or os.path.exists(destination):
+			# Directories can't have hard links
+			return False
 		original_path = self.getInodePath(inode)
 		if original_path:
 			logging.info("Hard linking file: {0}".format(destination))
@@ -444,7 +451,8 @@ class Copy(object):
 		given destination's path inode."""
 		s     = os.lstat(source)
 		inode = s[stat.ST_INO]
-		if not self.getInodePath(inode):
+		mode  = s[stat.ST_MODE]
+		if not stat.S_ISDIR(mode) and not self.getInodePath(inode):
 			logging.info("Copy: remapping inode for {0} to {1}".format(utf8(source), utf8(path)))
 			self.setInodePath(inode, path)
 			return True

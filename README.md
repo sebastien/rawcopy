@@ -104,7 +104,7 @@ and `/mnt/new-drive/backup-jane`, you can do:
 
 ```
 rawcopy -o /mnt/new-drive/ /mnt/old-drive/backup-john /mnt/old-drive/backup-jane
-``
+```
 
 Rawcopy will automatically identify the *base path* (`/mnt/old-drive/`) and
 map it to `mnt/new/drive`.
