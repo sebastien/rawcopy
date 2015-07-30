@@ -5,13 +5,13 @@
 PROJECT         = rawcopy
 PROJECT_VERSION = $(shell grep __version__ $(SOURCE_FILES) | head -n1 | cut -d'"' -f2)
 DOCUMENTATION   =
-SOURCES         = .
+SOURCES         = src
 LIBRARY         = 
 TESTS           = 
-SCRIPTS         = 
+SCRIPTS         = bin
 RESOURCES       =
 DIST            = dist
-API             = $(PROJECT)-api.html
+API             = doc/$(PROJECT)-api.html
 PACKAGE         = $(PROJECT)
 MODULES         = $(shell find $(SOURCES)/$(PACKAGE) -name "*.py" | cut -d "." -f1 | sed "s|^$(SOURCES)/||g;s|\/|\.|g;s|\.__init__||g" )
 MODULES        := rawcopy
