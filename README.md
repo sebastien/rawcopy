@@ -52,11 +52,17 @@ to re-create hard-links on the output directory.
 Rawcopy requires `python3` (tested on python-3.4) and can be easily installed
 through a variety of ways:
 
-Using pip: `pip install -U --user rawcopy`
+Using pip: 
 
-Using `easy_install`: `easy_install -U rawcopy`
+`pip install -U --user rawcopy`
 
-Using `curl`: `curl https://raw.githubusercontent.com/sebastien/rawcopy/master/rawcopy > rawcopy ; chmod +x rawcopy`
+Using `easy_install`:
+
+`easy_install -U rawcopy`
+
+Using `curl`: 
+
+`curl https://raw.githubusercontent.com/sebastien/rawcopy/master/rawcopy > rawcopy ; chmod +x rawcopy`
 
 ## Usage
 
