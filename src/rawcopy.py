@@ -32,31 +32,49 @@ Version :  0.1.0
 URL     :  http://github.com/sebastien/rawcopy
 ```
 
-Rawcopy is a tool that allows to copy directory trees that make heavy use of hard links,
+Rawcopy is a tool that copies directory trees while preserving hard links.
+Rawcopy is ideal if you're moving backup archives from tools such as
+`rsnapshot`, `rdiff` or
 such as trees backed up created by tools `rsnapshot`, `rdiff-backup` or Back In Time.
 
-Here is a typical scenario, imagine you have two incremental backups source trees
-to copy
+Here is a typical scenario:
+
+1) You have a directory called `/mnt/backups` that contains your backup
+   archive:
+
+   ```
+   $ cd /mnt/backups
+   $ du -sch *
+   54G	20111227-164323-320
+   42G	20120828-114147-345
+   ```
+
+2) You copy this directory to *another filesystem* `/mnt/new-backup`
+   using `rsync -aH` (or `cp -a`):
+
+   ```
+   $ rsync -aH /mnt/backups /mnt/new-backup
+   $ cd /mnt/new-backup
+   $ du -sch *
+   53G	20111227-164323-320
+   78G	20120828-114147-345
+   ```
+
+3) You notice that`20120828-114147-345` directory has almost doubled in size, because some
+   of its files are hard-links to content from `20111227-164323-320`, but are
+   not detected and copied as new files. As a result, instead of sharing the same
+   inode, this results in new files, and a lot of wasted space. A 1Tb backup might
+   end up being 10Tb of more without preserving hard links.
+
+However, using `rawcopy will give you the following result`
 
 ```
+$ rawcopy /mnt/backups -o /mnt/new-backups
+$ cd /mnt/new-backup
 $ du -sch *
 54G	20111227-164323-320
 42G	20120828-114147-345
 ```
-
-copying these using `rsync -aH` (or `cp -a`) gave me the following result:
-
-```
-$ du -sch *
-53G	20111227-164323-320
-78G	20120828-114147-345
-```
-
-The `20120828-114147-345` directory has almost doubled in size, because some
-of its files are hard-links to content from `20111227-164323-320`, but are
-not detected and copied as new files. As a result, instead of sharing the same
-inode, this results in new files, and a lot of wasted space. A 1Tb backup might
-end up being 10Tb of more without preserving hard links.
 
 ## Features
 
@@ -79,16 +97,14 @@ to re-create hard-links on the output directory.
 Rawcopy requires `python3` (tested on python-3.4) and can be easily installed
 through a variety of ways:
 
-Using pip: `pip install -U --user rawcopy`
-
-Using `easy_install`: `easy_install -U rawcopy`
-
-Using `curl`: `curl https://raw.githubusercontent.com/sebastien/rawcopy/master/rawcopy > rawcopy ; chmod +x rawcopy`
+- Using *pip*: `pip install -U --user rawcopy`
+- Using *easy_install*: `easy_install -U rawcopy`
+- Using *curl*: `curl https://raw.githubusercontent.com/sebastien/rawcopy/master/rawcopy > rawcopy ; chmod +x rawcopy`
 
 ## Usage
 
-Rawcopy is available both as a Python module (`rawcopy`) and a command
-line tool (`racopy`).
+Rawcopy is available both as a Python module (`import rawcopy`) and a command
+line tool (`rawcopy`).
 
 ```
 usage: rawcopy [-h] [-c CATALOGUE] [-o OUTPUT] [-r RANGE] [-t] [-C]
@@ -144,8 +160,8 @@ in the output log:
 
 ```
 Copying path 2553338:icon-video.svg
-                   ^^^^^^^
-                   PATH ID
+             ^^^^^^^
+             PATH ID
 ```
 
 To resume the command from path `#2553338` simly do:
@@ -176,6 +192,9 @@ with the suprisingly hard problem of copy directory trees with hard links.
 """
 
 # NOTE: os.path.exists() fails when symlink has unreachable target
+# TODO: Option (on by default) to not halt on error (Permissin, InputOuput, etc) but log them
+# TODO: Option to resume from a given path
+# TODO: Include and exclude patterns
 # TODO: Implement fast resume from catalogue (skip ahead to find the last index
 # -- or simply store the last offset).
 # TODO: Allow to use kyoto cabinet, which should be faster
@@ -324,13 +343,13 @@ class Copy(object):
 					# If we found a root, we ensure that it is prefixed with the
 					# base
 					assert base, "Catalogue must have a base directory before having roots"
-					assert p.startswith(base), "Catalogue roots must be prefixed by the base, base={0}, root={1}".format(utf8(base), utf8(p))
+					assert os.path.normpath(p).startswith(os.path.normpath(base)), "Catalogue roots must be prefixed by the base, base={0}, root={1}".format(utf8(base), utf8(p))
 					# Now we extract the suffix, which is the root minus the base
 					# and no leading /
 					self.root = root = p
 					source    = p
 					suffix    = p[len(self.base):]
-					if suffix[0] == "/": suffix = suffix[1:]
+					if suffix and suffix[0] == "/": suffix = suffix[1:]
 					destination = os.path.join(os.path.join(self.output, suffix))
 					if not (os.path.exists(destination) and not os.path.islink(destination)):
 						pd = os.path.dirname(destination)
@@ -370,7 +389,7 @@ class Copy(object):
 					elif not (os.path.exists(destination) or os.path.islink(destination)):
 						logging.info("Copying path [{2}] {0}:{1}".format(i,utf8(p),t))
 						if t == TYPE_DIR or os.path.isdir(source):
-							if t != TYPE_DIR: logging.warn("Source detected as directory, but typed as {0} -- {1}:{2}".format(t, i, utf(p)))
+							if t != TYPE_DIR: logging.warn("Source detected as directory, but typed as {0} -- {1}:{2}".format(t, i, utf8(p)))
 							self.copydir(source, destination, p)
 						elif t == TYPE_SYMLINK:
 							self.copylink(source, destination, p)
@@ -559,7 +578,7 @@ def command( args ):
 		help="The path where the source tree will be backed up."
 	)
 	parser.add_argument("-r", "--range", type=str,
-		help="The range of elements (by index) to copy from the catalogue"
+		help="The range of elements (by index) to copy from the catalogue as START[-END]"
 	)
 	parser.add_argument("-t", "--test", action="store_true", default=False,
 		help="Does a test run (no actual copy/creation of files)"
