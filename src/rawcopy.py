@@ -6,7 +6,7 @@
 # License           : BSD License
 # -----------------------------------------------------------------------------
 # Creation date     : 2015-07-27
-# Last modification : 2015-07-30
+# Last modification : 2015-09-08
 # -----------------------------------------------------------------------------
 
 import os, stat, sys, dbm, argparse, shutil
@@ -28,7 +28,7 @@ TYPE_SYMLINK = "S"
 \# Rawcopy: low-level directory tree copy
 
 ```
-Version :  0.1.0
+Version :  0.2.0
 URL     :  http://github.com/sebastien/rawcopy
 ```
 
@@ -91,6 +91,11 @@ and saving it to the output directory (as `__rawcopy__/catalogue.lst`). Then,
 rawcopy will use this list to copy the files from the source tree, keeping a
 map of original source tree inodes to paths in the destination output. This allows
 to re-create hard-links on the output directory.
+
+## Requirements
+
+- Unix system (tested on Ubuntu Linux)
+- Python 3
 
 ## Install
 
@@ -173,13 +178,25 @@ rawcopy -r2553338- -o <OUTPUT PATH> <PATH TO COPY>...
 Note that the trailing `-` is important as otherwise only that specific
 file will be copied.
 
-## Copying a  tree from one drive to another
-===============================================
+### Updating a previously rawcopy'ed directory
 
-- moving a backup directory from one drive to another drive, possibly
-  with different filesystems
-- moving a directory tree that makes a heavy use of hard links
-- incrementally copy large amounts of files (1M+ files, 1TB+)
+Imaging that you've already rawcopy'ed `/mnt/a` to `/mnt/b`, but since then
+`/mnt/a` has changed and you would like to update `/mnt/b` accordingly, without
+having to redo the full copy.
+
+The first step is to re-generate the catalogue with the `-C` option. This ensures
+that all the files in `/mnt/a`, including the new files, are known to `rawcopy`:
+
+```
+$ rawcopy -C /mnt/a -o /mnt/b
+```
+
+This will update the catalogue stored in `/mnt/b/__rawcopy__` even if it
+already exists. Once this is done, you can start/resume the copy as usual:
+
+```
+$ rawcopy /mnt/a -o /mnt/b
+```
 
 Acknowledgments
 ---------------
@@ -227,8 +244,6 @@ def utf8(s):
 # -----------------------------------------------------------------------------
 
 class Catalogue(object):
-
-	EXCLUDE = "data/wpi/"
 
 	def __init__( self, base, paths=() ):
 		self.base  = base
@@ -296,6 +311,7 @@ class Copy(object):
 		self.output = output
 		self.base   = None
 		self.root   = None
+		self._indexPath = os.path.join(self.output, "__rawcopy__/index.json")
 		if not os.path.exists(output):
 			logging.info("Creating output directory {0}".format(output))
 			os.makedirs(output)
@@ -324,9 +340,24 @@ class Copy(object):
 		base      = None
 		root      = None
 		self.test = test
+		# When no range is specified, we look for the index path
+		# and load it.
+		if range is None and os.path.exists(self._indexPath) and os.stat(path)[stat.ST_MTIME] <= os.stat(self._indexPath)[stat.ST_MTIME]:
+			with open(self._indexPath, "r") as f:
+				r = f.read()
+			try:
+				r = int(r)
+				range = (r,-1)
+			except ValueError as e:
+				pass
 		with open(path, "r") as f:
 			for line in f:
-				j, t, p   = line.split(":", 2) ; p = p[:-1]
+				j_t_p     = line.split(":", 2)
+				if len(j_t_p) != 3:
+					logging.error("Malformed line, expecting at least 3 colon-separated values: {0}".format(repr(line)))
+					continue
+				j, t, p   =  j_t_p
+				p = p[:-1]
 				i         = int(j) ; self.last = i
 				if t == TYPE_BASE:
 					# The first line of the catalogue is expected to be the base
@@ -409,10 +440,15 @@ class Copy(object):
 				# We sync the database every 1000 item
 				if j.endswith("000") and (not range or i>=range[0]):
 					logging.info("{0} items processed, syncing db".format(i))
-					if hasattr(self.db, "sync"):
-						self.db.sync()
+					self._sync(j)
 		# We don't forget to close the DB
 		self._close()
+
+	def _sync( self, index ):
+		if hasattr(self.db, "sync"):
+			self.db.sync()
+		with open(self._indexPath, "w") as f:
+			f.write(str(index))
 
 	def copyattr( self, source, destination, stats=None ):
 		"""Copies the attributes from source to destination, (re)using the
@@ -548,8 +584,14 @@ def run( args ):
 		logging.info("Creating source catalogue at {0}".format(cat_path))
 		c = Catalogue(base, sources)
 		c.save(cat_path)
+	elif args.catalogue_only:
+		logging.info("Catalogue-only mode, regenerating the catalogue")
+		c = Catalogue(base, sources)
+		c.save(cat_path)
 	# Now we iterate over the catalogue
-	if args.output:
+	if args.catalogue_only:
+		logging.info("Catalogue-only mode, skipping copy. Remove -C option to do the actual copy")
+	elif args.output:
 		logging.info("Copy catalogue's contents to {0}".format(args.output))
 		c = Copy(args.output)
 		r = args.range
