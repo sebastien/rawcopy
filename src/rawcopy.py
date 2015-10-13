@@ -6,23 +6,25 @@
 # License           : BSD License
 # -----------------------------------------------------------------------------
 # Creation date     : 2015-07-27
-# Last modification : 2015-09-08
+# Last modification : 2015-10-13
 # -----------------------------------------------------------------------------
 
-import os, stat, sys, dbm, argparse, shutil
+import os, stat, sys, dbm, argparse, shutil, fnmatch
 
 try:
 	import reporter as logging
 except:
 	import logging
 
-__version__  = "0.1.0"
+__version__  = "0.2.0"
 LICENSE      = "http://ffctn.com/doc/licenses/bsd"
 TYPE_BASE    = "B"
 TYPE_ROOT    = "R"
 TYPE_DIR     = "D"
 TYPE_FILE    = "F"
 TYPE_SYMLINK = "S"
+
+# TODO: Directories created with makedirs should preserve the creation/modification time
 
 """{{{
 \# Rawcopy: low-level directory tree copy
@@ -112,7 +114,7 @@ Rawcopy is available both as a Python module (`import rawcopy`) and a command
 line tool (`rawcopy`).
 
 ```
-usage: rawcopy [-h] [-c CATALOGUE] [-o OUTPUT] [-r RANGE] [-t] [-C]
+usage: rawcopy [-h] [-c CATALOGUE] [-o OUTPUT] [-r RANGE] [-T] [-C]
                   SOURCE [SOURCE ...]
 
 Creates a raw copy of the given source tree
@@ -129,7 +131,7 @@ optional arguments:
   -r RANGE, --range RANGE
                         The range of elements (by index) to copy from the
                         catalogue
-  -t, --test            Does a test run (no actual copy/creation of files)
+  -T, --test            Does a test run (no actual copy/creation of files)
   -C, --catalogue-only  Does not do any copying, simple creates the catalogue
 ```
 
@@ -239,15 +241,59 @@ def utf8(s):
 
 # -----------------------------------------------------------------------------
 #
+# FILTER
+#
+# -----------------------------------------------------------------------------
+
+class Filter(object):
+	"""A filter class that allows to include/exclude (path, type) couples."""
+
+	def __init__( self, types=None, names=None ):
+		self._includeName = names or []
+		self._includeType = [_.upper() for _ in (_[0] for _ in types)] if types else []
+		self._excludeName = [_ for _ in (_[0] for _ in names)] if names else []
+		self._excludeType = []
+
+	def match( self, path, type=None ):
+		"""Tells if the given path/type couple matched the filter. If `type`
+		is `None`, it will be retrieved from the filesystem."""
+		name = os.path.basename(path)
+		# Dynamically retrieves the type, if necessary
+		if type is None:
+			if os.path.islink(path):
+				type = TYPE_SYMLINK
+			elif os.path.isdir(path):
+				type = TYPE_DIR
+			else:
+				type = TYPE_FILE
+		# We process exclusions first
+		# for p in self._excludeName:
+		# 	if fnmatch.fnmatch(name, p):
+		# 		return False
+		# Then we match the type
+		matched = type in self._includeType if self._includeType else True
+		# Then we proceeed with the name
+		if matched:
+			for p in self._includeName:
+				if fnmatch.fnmatch(name, p):
+					matched = True
+		return matched
+
+# -----------------------------------------------------------------------------
+#
 # CATALOGUE
 #
 # -----------------------------------------------------------------------------
 
 class Catalogue(object):
+	"""The catalogue object maintains a text-based list of all the files
+	walked in a directory. The catalogue servers as a base for quickly
+	iterating through a filesystem tree."""
 
-	def __init__( self, base, paths=() ):
-		self.base  = base
-		self.paths = [_ for _ in paths]
+	def __init__( self, base, paths=(), filter=None ):
+		self.base   = base
+		self.paths  = [_ for _ in paths]
+		self.filter = filter
 
 	def walk( self ):
 		counter = 0
@@ -262,24 +308,35 @@ class Catalogue(object):
 				logging.info("Catalogue: Skipping FIFO file: {0}".format(utf8(p)))
 			elif stat.S_ISSOCK(mode):
 				logging.info("Catalogue: Skipping socket file: {0}".format(utf8(p)))
-			elif os.path.isfile(p):
+			elif os.path.isfile(p) and self.match(p, TYPE_FILE):
 				yield (counter, TYPE_ROOT, os.path.dirname(p))
 				counter += 1
 				yield (counter, TYPE_FILE, os.path.basename(p))
-			elif os.path.islink(p):
+			elif os.path.islink(p) and self.match(p, TYPE_SYMLINK):
 				yield (counter, TYPE_ROOT, os.path.dirname(p))
 				counter += 1
 				yield (counter, TYPE_SYMLINK, os.path.basename(p))
-			else:
+			elif self.match(p, TYPE_DIR):
 				for root, dirs, files in os.walk(p, topdown=True):
 					logging.info("Catalogue: {0} files {1} dirs in {2}".format(len(files), len(dirs), utf8(root)))
 					yield (counter, TYPE_ROOT, root)
 					for name in files:
-						yield (counter, TYPE_SYMLINK if os.path.islink(os.path.join(root, name)) else TYPE_FILE, name)
-						counter += 1
+						path = os.path.join(root, name)
+						type = TYPE_SYMLINK if os.path.islink(path) else TYPE_FILE
+						if self.match(path, type):
+							yield (counter, path, name)
+							counter += 1
 					for name in dirs:
-						yield (counter, TYPE_DIR, name)
-						counter += 1
+						path = os.path.join(root, name)
+						if self.match(path, TYPE_DIR):
+							yield (counter, TYPE_DIR, name)
+							counter += 1
+			else:
+				logging.info("Catalogue: Filtered out path: {0}".format(utf8(p)))
+
+	def match( self, path, type ):
+		"""Tells if the given path/type matches the filter, if any is available."""
+		return self.filter.match(path, type) if self.filter else True
 
 	def write( self, output ):
 		for i, t, p in self.walk():
@@ -305,12 +362,13 @@ class Catalogue(object):
 
 class Copy(object):
 
-	def __init__( self, output ):
+	def __init__( self, output, filter=None ):
 		self.db     = None
 		self.last   = -1
 		self.output = output
 		self.base   = None
 		self.root   = None
+		self.filter = filter
 		self._indexPath = os.path.join(self.output, "__rawcopy__/index.json")
 		if not os.path.exists(output):
 			logging.info("Creating output directory {0}".format(output))
@@ -330,7 +388,7 @@ class Copy(object):
 			self.db = None
 		return self
 
-	def fromCatalogue( self, path, range=None, test=False ):
+	def fromCatalogue( self, path, range=None, test=False, callback=None ):
 		"""Reads the given catalogue and copies directories, symlinks and files
 		listed in the catalogue. Note that this expects the catalogue to
 		be in traversal order."""
@@ -388,9 +446,11 @@ class Copy(object):
 						# We make sure the source exists
 						if not os.path.exists(source) and not os.path.islink(source):
 							logging.info("Root does not exists: {0}:{1}".format(i, utf8(p)))
+						# TODO: How do we handle filters at this stage?
 						# We make sure the parent destination exists (it should be the case)
 						if not os.path.exists(pd):
-							os.makedirs(pd)
+							# We copy the original parent directory
+							os.copydir(p, pd, suffix)
 						if os.path.isdir(source):
 							self.copydir(p, destination, suffix)
 						elif os.path.islink(source):
@@ -406,6 +466,9 @@ class Copy(object):
 						if len(range) > 1 and range[1] >= 0 and i > range[1]:
 							logging.info("Reached end of range {0} >= {1}".format(i, range[1]))
 							break
+					# We check if the filter matches
+					if not self.match(p, t):
+						continue
 					assert root and self.output
 					# We prepare the source, suffix and destination
 					source = os.path.join(root, p)
@@ -428,7 +491,8 @@ class Copy(object):
 							self.copyfile(source, destination, p)
 						else:
 							logging.error("Unsupported catalogue type: {1} at {0}:{1}:{2}", i, t, p)
-					else:
+					elif not self.test:
+						# We only fo there if we're not in test mode
 						if t == TYPE_DIR:
 							logging.info("Skipping already copied directory: {0}:{1}".format(i, utf8(destination)))
 						elif t == TYPE_SYMLINK:
@@ -437,12 +501,18 @@ class Copy(object):
 							logging.info("Skipping already copied file: {0}:{1}".format(i, utf8(destination)))
 						# TODO: We should repair a damaged DB and make sure the inode is copied
 						self.ensureInodePath(source, suffix)
+					# We call the callback
+					if callback:
+						callback(i, t, p, source, destination)
 				# We sync the database every 1000 item
 				if j.endswith("000") and (not range or i>=range[0]):
 					logging.info("{0} items processed, syncing db".format(i))
 					self._sync(j)
 		# We don't forget to close the DB
 		self._close()
+
+	def match( self, path, type ):
+		return self.filter.match(path, type) if self.filter else False
 
 	def _sync( self, index ):
 		if hasattr(self.db, "sync"):
@@ -569,6 +639,8 @@ def run( args ):
 		if not os.path.exists(s):
 			logging.error("Source path does not exists: {0}".format(s))
 			return None
+	# We setup the filter
+	node_filter = Filter(types=args.type, names=args.name)
 	# We log the information about the sources
 	logging.info("Using base: {0}".format(base))
 	for _ in sources: logging.info("Using source: {0}".format(_))
@@ -582,18 +654,23 @@ def run( args ):
 	cat_path = args.catalogue or os.path.join(args.output, "__rawcopy__", "catalogue.lst")
 	if not os.path.exists(cat_path):
 		logging.info("Creating source catalogue at {0}".format(cat_path))
-		c = Catalogue(base, sources)
+		c = Catalogue(base, sources, node_filter)
 		c.save(cat_path)
 	elif args.catalogue_only:
 		logging.info("Catalogue-only mode, regenerating the catalogue")
-		c = Catalogue(base, sources)
+		c = Catalogue(base, sources, node_filter)
 		c.save(cat_path)
 	# Now we iterate over the catalogue
 	if args.catalogue_only:
 		logging.info("Catalogue-only mode, skipping copy. Remove -C option to do the actual copy")
+	elif args.list:
+		# FIXME: Use a copy with no action
+		c = Copy(args.output, node_filter)
+		r = args.range
+		c.fromCatalogue(cat_path, range=r, test=True, callback=lambda i,t,p,s,d:sys.stdout.write("{0}\t{1}\t{2}\t{3}\t{4}\n".format(i,t,p,s,d)))
 	elif args.output:
 		logging.info("Copy catalogue's contents to {0}".format(args.output))
-		c = Copy(args.output)
+		c = Copy(args.output, node_filter)
 		r = args.range
 		if r:
 			try:
@@ -622,11 +699,20 @@ def command( args ):
 	parser.add_argument("-r", "--range", type=str,
 		help="The range of elements (by index) to copy from the catalogue as START[-END]"
 	)
-	parser.add_argument("-t", "--test", action="store_true", default=False,
+	parser.add_argument("-t", "--type", type=str, nargs="*", action="append",
+		help="Only processes the nodes of the given type ([D]irectory/[F]ile/[S]ymlink)"
+	)
+	parser.add_argument("-n", "--name", type=str, nargs="*", action="append",
+		help="Only processes the nodes with the given name"
+	)
+	parser.add_argument("-T", "--test", action="store_true", default=False,
 		help="Does a test run (no actual copy/creation of files)"
 	)
 	parser.add_argument("-C", "--catalogue-only", action="store_true", default=False,
 		help="Does not do any copying, simple creates the catalogue"
+	)
+	parser.add_argument("-l", "--list", action="store_true", default=False,
+		help="Does not do any copying, but outputs the catalogue as INDEX<TAB>TYPE<TAB>PATH"
 	)
 	args = parser.parse_args()
 	run(args)
