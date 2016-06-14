@@ -21,7 +21,6 @@ DIST_CONTENT    = $(DOCUMENTATION) $(SOURCES) $(SCRIPTS) $(TESTS) $(RESOURCES) M
 CHECK_BLACKLIST = 
 PYTHON          = PYTHONPATH=$(SOURCES) $(shell which python)
 PYTHONHOME      = $(shell $(PYTHON) -c "import sys;print filter(lambda x:x[-13:]=='site-packages',sys.path)[0]")
-SDOC            = $(shell which sdoc)
 PYCHECKER       = $(shell which pychecker)
 CTAGS           = $(shell which ctags)
 TEXTO           = $(shell which texto)
@@ -109,11 +108,6 @@ README.md: src/rawcopy.py
 
 doc: README.md
 	@echo "Generating $(PROJECT) documentation"
-ifeq ($(shell basename spam/$(SDOC)),sdoc)
-	@$(SDOC) -mtexto -cp$(SOURCES) $(MODULES) $(API)
-else
-	@echo "Sdoc is required to generate $(PROJECT) documentation."
-endif
 
 tags:
 	@echo "Generating $(PROJECT) tags"

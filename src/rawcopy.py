@@ -16,13 +16,14 @@ try:
 except:
 	import logging
 
-__version__  = "0.2.0"
+__version__  = "0.3.0"
 LICENSE      = "http://ffctn.com/doc/licenses/bsd"
 TYPE_BASE    = "B"
 TYPE_ROOT    = "R"
 TYPE_DIR     = "D"
 TYPE_FILE    = "F"
 TYPE_SYMLINK = "S"
+TYPES        = (TYPE_BASE, TYPE_ROOT, TYPE_DIR, TYPE_FILE, TYPE_SYMLINK)
 
 # TODO: Directories created with makedirs should preserve the creation/modification time
 
@@ -36,8 +37,7 @@ URL     :  http://github.com/sebastien/rawcopy
 
 Rawcopy is a tool that copies directory trees while preserving hard links.
 Rawcopy is ideal if you're moving backup archives from tools such as
-`rsnapshot`, `rdiff` or
-such as trees backed up created by tools `rsnapshot`, `rdiff-backup` or Back In Time.
+`rsnapshot`, `rdiff` or tree, `rdiff-backup` or Back In Time.
 
 Here is a typical scenario:
 
@@ -68,7 +68,7 @@ Here is a typical scenario:
    inode, this results in new files, and a lot of wasted space. A 1Tb backup might
    end up being 10Tb of more without preserving hard links.
 
-However, using `rawcopy will give you the following result`
+However, using `rawcopy` will give you the following result
 
 ```
 $ rawcopy /mnt/backups -o /mnt/new-backups
@@ -171,7 +171,7 @@ Copying path 2553338:icon-video.svg
              PATH ID
 ```
 
-To resume the command from path `#2553338` simly do:
+To resume the command from path `2553338`:
 
 ```
 rawcopy -r2553338- -o <OUTPUT PATH> <PATH TO COPY>...
@@ -237,6 +237,7 @@ with the suprisingly hard problem of copy directory trees with hard links.
 #        LNK
 
 def utf8(s):
+	"""Ensures that the given string is in UTF-8"""
 	return s.encode("utf8", "replace").decode("utf8")
 
 # -----------------------------------------------------------------------------
@@ -290,12 +291,24 @@ class Catalogue(object):
 	walked in a directory. The catalogue servers as a base for quickly
 	iterating through a filesystem tree."""
 
-	def __init__( self, base, paths=(), filter=None ):
+	# SEE: https://en.wikipedia.org/wiki/Delimiter
+	FIELD_SEPARATOR = chr(31)
+	LINE_SEPARATOR  = "\n"
+
+
+	def __init__( self, paths=(), base=None, filter=None ):
+		"""Creates a new catalogue with the given `base` path, given
+		list of `paths` and optional `filter`."""
+		base        = base or os.path.commonprefix(sources)
+		if not os.path.exists(base) or not os.path.isdir(base): base = os.path.dirname(base)
 		self.base   = base
 		self.paths  = [_ for _ in paths]
+		for _ in self.paths:
+			assert _.startswith(base)
 		self.filter = filter
 
 	def walk( self ):
+		"""Walks all the catalogue's `paths` and yields triples `(index, type, path)`."""
 		counter = 0
 		yield (counter, TYPE_BASE, self.base)
 		for p in self.paths:
@@ -318,13 +331,13 @@ class Catalogue(object):
 				yield (counter, TYPE_SYMLINK, os.path.basename(p))
 			elif self.match(p, TYPE_DIR):
 				for root, dirs, files in os.walk(p, topdown=True):
-					logging.info("Catalogue: {0} files {1} dirs in {2}".format(len(files), len(dirs), utf8(root)))
+					logging.info("Catalogue:\t#{3:010d}\t{0:04d}f+{1:04d}d\t{2}".format(len(files), len(dirs), utf8(root), counter))
 					yield (counter, TYPE_ROOT, root)
 					for name in files:
 						path = os.path.join(root, name)
 						type = TYPE_SYMLINK if os.path.islink(path) else TYPE_FILE
 						if self.match(path, type):
-							yield (counter, path, name)
+							yield (counter, type, name)
 							counter += 1
 					for name in dirs:
 						path = os.path.join(root, name)
@@ -339,14 +352,19 @@ class Catalogue(object):
 		return self.filter.match(path, type) if self.filter else True
 
 	def write( self, output ):
+		"""Writes the catalogue to the given output, this triggers a walk
+		of the catalogue."""
 		for i, t, p in self.walk():
+			assert t in TYPES
 			try:
-				line = bytes("{0}:{1}:{2}\n".format(i,t,p), "utf8")
+				line = bytes("{0}{3}{1}{3}{2}{4}".format(i,t,p, self.FIELD_SEPARATOR, self.LINE_SEPARATOR), "utf8")
 				output.write(line)
 			except UnicodeEncodeError as e:
 				logging.error("Catalogue: exception occured {0}".format(e))
 
 	def save( self, path ):
+		"""Saves the catalogue to the given `path`. This will in turn call
+		`write()`."""
 		d = os.path.dirname(path)
 		if not os.path.exists(d):
 			logging.info("Catalogue: creating catalogue directory {0}".format(utf8(d)))
@@ -361,6 +379,8 @@ class Catalogue(object):
 # -----------------------------------------------------------------------------
 
 class Copy(object):
+	"""A collection of tools to do the actual copy from a source directory to
+	a destination."""
 
 	def __init__( self, output, filter=None ):
 		self.db     = None
@@ -410,7 +430,7 @@ class Copy(object):
 				pass
 		with open(path, "r") as f:
 			for line in f:
-				j_t_p     = line.split(":", 2)
+				j_t_p     = line.split(Catalogue.FIELD_SEPARATOR, 2)
 				if len(j_t_p) != 3:
 					logging.error("Malformed line, expecting at least 3 colon-separated values: {0}".format(repr(line)))
 					continue
@@ -450,7 +470,7 @@ class Copy(object):
 						# We make sure the parent destination exists (it should be the case)
 						if not os.path.exists(pd):
 							# We copy the original parent directory
-							os.copydir(p, pd, suffix)
+							self.copydir(p, pd, suffix)
 						if os.path.isdir(source):
 							self.copydir(p, destination, suffix)
 						elif os.path.islink(source):
@@ -490,7 +510,7 @@ class Copy(object):
 						elif t == TYPE_FILE:
 							self.copyfile(source, destination, p)
 						else:
-							logging.error("Unsupported catalogue type: {1} at {0}:{1}:{2}", i, t, p)
+							logging.error("Copy: line {0} unsupported type {1}".format(i, t, p))
 					elif not self.test:
 						# We only fo there if we're not in test mode
 						if t == TYPE_DIR:
@@ -654,11 +674,11 @@ def run( args ):
 	cat_path = args.catalogue or os.path.join(args.output, "__rawcopy__", "catalogue.lst")
 	if not os.path.exists(cat_path):
 		logging.info("Creating source catalogue at {0}".format(cat_path))
-		c = Catalogue(base, sources, node_filter)
+		c = Catalogue(sources, base, node_filter)
 		c.save(cat_path)
 	elif args.catalogue_only:
 		logging.info("Catalogue-only mode, regenerating the catalogue")
-		c = Catalogue(base, sources, node_filter)
+		c = Catalogue(sources, base, node_filter)
 		c.save(cat_path)
 	# Now we iterate over the catalogue
 	if args.catalogue_only:

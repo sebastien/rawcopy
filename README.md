@@ -7,8 +7,7 @@ URL     :  http://github.com/sebastien/rawcopy
 
 Rawcopy is a tool that copies directory trees while preserving hard links.
 Rawcopy is ideal if you're moving backup archives from tools such as
-`rsnapshot`, `rdiff` or
-such as trees backed up created by tools `rsnapshot`, `rdiff-backup` or Back In Time.
+`rsnapshot`, `rdiff` or tree, `rdiff-backup` or Back In Time.
 
 Here is a typical scenario:
 
@@ -39,7 +38,7 @@ Here is a typical scenario:
    inode, this results in new files, and a lot of wasted space. A 1Tb backup might
    end up being 10Tb of more without preserving hard links.
 
-However, using `rawcopy will give you the following result`
+However, using `rawcopy` will give you the following result
 
 ```
 $ rawcopy /mnt/backups -o /mnt/new-backups
@@ -85,7 +84,7 @@ Rawcopy is available both as a Python module (`import rawcopy`) and a command
 line tool (`rawcopy`).
 
 ```
-usage: rawcopy [-h] [-c CATALOGUE] [-o OUTPUT] [-r RANGE] [-t] [-C]
+usage: rawcopy [-h] [-c CATALOGUE] [-o OUTPUT] [-r RANGE] [-T] [-C]
                   SOURCE [SOURCE ...]
 
 Creates a raw copy of the given source tree
@@ -102,7 +101,7 @@ optional arguments:
   -r RANGE, --range RANGE
                         The range of elements (by index) to copy from the
                         catalogue
-  -t, --test            Does a test run (no actual copy/creation of files)
+  -T, --test            Does a test run (no actual copy/creation of files)
   -C, --catalogue-only  Does not do any copying, simple creates the catalogue
 ```
 
@@ -142,7 +141,7 @@ Copying path 2553338:icon-video.svg
              PATH ID
 ```
 
-To resume the command from path `#2553338` simly do:
+To resume the command from path `2553338`:
 
 ```
 rawcopy -r2553338- -o <OUTPUT PATH> <PATH TO COPY>...
