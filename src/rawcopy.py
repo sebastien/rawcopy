@@ -703,9 +703,13 @@ def run( args ):
 			logging.info("Test mode enabled (not actual file copy)".format(r))
 		c.fromCatalogue(cat_path, range=r, test=args.test)
 
-def command( args ):
+def command( args=None, logger=False ):
+	args = sys.argv[1:] if args is None else args
+	if logger:
+		if hasattr(logging, "install"): logging.install(channel="stderr")
+		else: logging.basicConfig(level=logging.DEBUG)
 	parser = argparse.ArgumentParser(
-		description="Creates a raw copy of the given source tree"
+		description="Creates a raw copy of the given source tree, properly preserving hard links."
 	)
 	parser.add_argument("source", metavar="SOURCE",  type=str, nargs="+",
 		help="The source tree to backup"
@@ -745,8 +749,6 @@ def command( args ):
 
 
 if __name__ == "__main__":
-	if hasattr(logging, "install"): logging.install(channel="stderr")
-	else: logging.basicConfig(level=logging.DEBUG)
-	command(sys.argv[1:])
+	command()
 
 # EOF - vim: ts=4 sw=4 noet

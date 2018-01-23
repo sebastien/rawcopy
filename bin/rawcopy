@@ -1,1 +1,3 @@
-python3 -m rawcopy $@
+#!/usr/bin/env python3
+import rawcopy
+rawcopy.command()

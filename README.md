@@ -1,6 +1,16 @@
 # Rawcopy: low-level directory tree copy
 
 ```
+ _ __    __     __  __  __    ___    ___   _____   __  __    
+/\`'__\/'__`\  /\ \/\ \/\ \  /'___\ / __`\/\ '__`\/\ \/\ \   
+\ \ \//\ \L\.\_\ \ \_/ \_/ \/\ \__//\ \L\ \ \ \L\ \ \ \_\ \  
+ \ \_\\ \__/.\_\\ \___x___/'\ \____\ \____/\ \ ,__/\/`____ \ 
+  \/_/ \/__/\/_/ \/__//__/   \/____/\/___/  \ \ \/  `/___/> \
+                                             \ \_\     /\___/
+                                              \/_/     \/__/
+```
+
+```
 Version :  0.2.0
 URL     :  http://github.com/sebastien/rawcopy
 ```
@@ -87,7 +97,7 @@ line tool (`rawcopy`).
 usage: rawcopy [-h] [-c CATALOGUE] [-o OUTPUT] [-r RANGE] [-T] [-C]
                   SOURCE [SOURCE ...]
 
-Creates a raw copy of the given source tree
+Creates a raw copy of the given source tree, properly preserving hard links.
 
 positional arguments:
   SOURCE                The source tree to backup
